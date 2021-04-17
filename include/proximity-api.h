@@ -5,6 +5,7 @@
  *      Author: balazs
  */
 
+#include <vector>
 #include <memory>
 
 #ifndef FRAGOR_PROXIMITY_API_H_
@@ -19,7 +20,7 @@ private:
   std::unique_ptr<ProximityImpl> mImpl;
 
 public:
-  Proximity(std::initializer_list<float> const aPara);
+  Proximity(std::vector<float> const &aPara, uint32_t const aIterations);
   ~Proximity();
 
   float doIt() const;

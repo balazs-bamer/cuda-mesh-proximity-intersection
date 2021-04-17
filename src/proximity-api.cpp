@@ -2,8 +2,8 @@
 #include "proximity-impl.cuh"
 
 
-fragor::Proximity::Proximity(std::initializer_list<float> const aPara)
-: mImpl{ std::make_unique<fragor::ProximityImpl>(aPara)} {
+fragor::Proximity::Proximity(std::vector<float> const &aPara, uint32_t const aIterations)
+: mImpl{ std::make_unique<fragor::ProximityImpl>(aPara, aIterations)} {
 }
 
 fragor::Proximity::~Proximity() = default;

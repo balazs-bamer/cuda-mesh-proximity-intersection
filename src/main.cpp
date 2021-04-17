@@ -2,7 +2,7 @@
 #include <iostream>
 
 int main(int aArgc, char **aArgv) {
-  fragor::Proximity proxy({1.1f, 2.2f, 3.3f});
+  fragor::Proximity proxy({1.0f, 2.0f, 3.0f}, 10u);
   std::cout << proxy.doIt() << '\n';
   return 0;
 }

@@ -29,6 +29,7 @@
 								<option id="nvcc.compiler.pic.1309039707" name="Position Independent Code (-fPIC)" superClass="nvcc.compiler.pic" value="true" valueType="boolean"/>
 								<option id="nvcc.compiler.include.paths.1440394232" name="Include paths (-I)" superClass="nvcc.compiler.include.paths" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/include}&quot;"/>
+									<listOptionValue builtIn="false" value="/home/balazs/munka/cuda-trajectory-planner/repos/cuda-api-wrappers/src/"/>
 								</option>
 								<option id="nvcc.compiler.option.gprof.1410592956" name="Generate gprof information (-pg)" superClass="nvcc.compiler.option.gprof" value="true" valueType="boolean"/>
 								<inputType id="nvcc.compiler.input.cu.1656101615" superClass="nvcc.compiler.input.cu"/>
