@@ -37,6 +37,9 @@
 								<inputType id="nvcc.compiler.input.c.701389759" superClass="nvcc.compiler.input.c"/>
 							</tool>
 							<tool id="nvcc.linker.base.211946256" name="NVCC Linker" superClass="nvcc.linker.base">
+								<option id="nvcc.linker.option.libs.2134473702" superClass="nvcc.linker.option.libs" valueType="libs">
+									<listOptionValue builtIn="false" value="cuda"/>
+								</option>
 								<inputType id="nvcc.linker.input.646237974" superClass="nvcc.linker.input">
 									<additionalInput kind="additionalinputdependency" paths="$(USER_OBJS)"/>
 									<additionalInput kind="additionalinput" paths="$(LIBS)"/>
@@ -142,4 +145,5 @@
 			<resource resourceType="PROJECT" workspacePath="/cuda-mesh-proximity-intersection"/>
 		</configuration>
 	</storageModule>
+	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cproject>

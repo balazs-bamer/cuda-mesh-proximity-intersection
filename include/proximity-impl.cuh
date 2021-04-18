@@ -30,35 +30,45 @@ public:
 class Transfer final {
 private:
   uint32_t  mSize;
-  float    *mData;
+  float    *mDataHost;
+  float    *mDataDevice;
+  float     mFactor;
   float     mResult;
 
 public:
              __host__          Transfer() = default; // must be trivially constructible
              __host__          ~Transfer() = default;
-             __host__ void     init(float *aPointer, std::vector<float> const &aPara);
+             __host__ void     init(float *aPointerHost, float *aPointerDevice, std::vector<float> const &aPara);
   __device__ __host__ uint32_t size() const { return mSize; }
+  __device__          void     adjust(float const aIncrement) { mFactor += aIncrement; }
   __device__          void     compute();
   __device__ __host__ float    getResult() { return mResult; }
 };
 
 class ProximityImpl final {
 private:
-  Init                                        mInit;
-  cuda::memory::managed::unique_ptr<float[]>  mData;
-  cuda::memory::managed::unique_ptr<Transfer> mTransfer;
-  uint32_t const                              cmIterations;
+  Init                              mInit;
+  cuda::device_t                    mDevice;
+  cuda::memory::mapped::region_pair mData;
+  cuda::memory::mapped::region_pair mTransfer;
+  Transfer * const                  mTransferHost;
+  uint32_t const                    cmIterations;
 
 public:
   ProximityImpl(std::vector<float> const &aPara, uint32_t const aIterations)
   : mInit()
-  , mData(cuda::memory::managed::make_unique<float[]>(aPara.size()))
-  , mTransfer(cuda::memory::managed::make_unique<Transfer>())
+  , mDevice(cuda::device::current::get())
+  , mData(cuda::memory::mapped::allocate(mDevice, aPara.size() * sizeof(float), cuda::memory::cpu_write_combining::with_wc))
+  , mTransfer(cuda::memory::mapped::allocate(mDevice, sizeof(Transfer), cuda::memory::cpu_write_combining::without_wc))
+  , mTransferHost(static_cast<Transfer*>(mTransfer.host_side))
   , cmIterations(aIterations) {
-    mTransfer->init(mData.get(), aPara);
+    mTransferHost->init(static_cast<float*>(mData.host_side), static_cast<float*>(mData.device_side), aPara);
   }
 
-  ~ProximityImpl() = default;
+  ~ProximityImpl() {
+    cuda::memory::mapped::free(mData);
+    cuda::memory::mapped::free(mTransfer);
+  }
 
   float doIt() const;
 };
