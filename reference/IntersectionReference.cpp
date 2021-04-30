@@ -101,7 +101,7 @@ if(result) std::cout << "coplanar circumference or interior\n";
   return result;
 }
 
-bool checkCornerOnPerimeterAndInterior(Eigen::Vector2f aShape1[3], Eigen::Vector2f aShape2[3]) noexcept {
+bool hasCommonPoint(Eigen::Vector2f aShape1[3], Eigen::Vector2f aShape2[3]) noexcept {
   Eigen::Vector2f normals1[3]; // i : i->(i+1)%3
   Eigen::Vector2f normals2[3];
   calculateNormals(aShape1, normals1); // Normal vectors point to the center.
@@ -121,36 +121,6 @@ bool checkCornerOnPerimeterAndInterior(Eigen::Vector2f aShape1[3], Eigen::Vector
   return result;
 }
     
-bool checkTrueIntersecitonOfSides(Eigen::Vector2f aShape1[3], Eigen::Vector2f aShape2[3]) noexcept {
-  bool result = false;
-  for(int32_t indexSide1 = 0; indexSide1 < 3; ++indexSide1) {
-    for(int32_t indexSide2 = 0; indexSide2 < 3; ++indexSide2) {
-      Eigen::Vector2f &side1a = aShape1[indexSide1];
-      Eigen::Vector2f &side1b = aShape1[(indexSide1 + 1) % 3];
-      Eigen::Vector2f &side2a = aShape2[indexSide2];
-      Eigen::Vector2f &side2b = aShape2[(indexSide2 + 1) % 3];
-      // Manually solve linear EQ to make sure we have as few branches as possible.
-      uint32_t nonzeroAindex = (fabs(side1a(0) - side1b(0)) > cgEpsilon ? 0 : 1);
-      float a = side1a(nonzeroAindex) - side1b(nonzeroAindex);
-      float b = side2b(nonzeroAindex) - side2a(nonzeroAindex);
-      float c = side1a(1 - nonzeroAindex) - side1b(1 - nonzeroAindex);
-      float d = side2b(1 - nonzeroAindex) - side2a(1 - nonzeroAindex);
-      float determinant = a * d - b * c;
-      if(fabs(determinant) > cgEpsilon) {
-        float k = side1a(nonzeroAindex) - side2a(nonzeroAindex);
-        float l = side1a(1 - nonzeroAindex) - side2a(1 - nonzeroAindex);
-        float v = (l * a - c * k) / determinant;
-        float u = (k - b * v) / a;
-if(u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f) std::cout << u << ' ' << v << " coplanar sides intersect\n";
-        result = result || (u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f);  // The intersection is inside of both sides.
-      }
-      else { // nothing to do, because the lines are parallel but can't touch each other.
-      }
-    }
-  }
-  return result;
-}
-
 bool hasCommonPoint(CudaConstTriangle const aShape1, CudaConstTriangle const aShape2, Eigen::Vector3f const &aShape1normal, Eigen::Vector3f const &aShape2normal) noexcept { // coplanar
   Eigen::Vector3f normal;
   if(aShape1normal.dot(aShape2normal) > 0.0f) {
@@ -181,13 +151,7 @@ bool hasCommonPoint(CudaConstTriangle const aShape1, CudaConstTriangle const aSh
     shape2[i](0) = aShape2[i](indexX);
     shape2[i](1) = aShape2[i](indexY);
   }
-  bool result = checkCornerOnPerimeterAndInterior(shape1, shape2);
-  if(!result) { // Common point may only occur now when sides truly intersect each other.
-    result = checkTrueIntersecitonOfSides(shape1, shape2);
-  }
-  else { // nothing to do
-  }
-  return result;
+  return hasCommonPoint(shape1, shape2);
 }
 
 void calculateIntersectionParameter(
@@ -292,13 +256,13 @@ std::cout << "on intersecting line\n";
 }
 
 Eigen::Matrix3f randomTransform() {
-  std::default_random_engine generator;
+/*  std::default_random_engine generator;
   generator.seed((std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::time_point::min()).count());
-  std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
-  Eigen::Matrix3f result;
-  for(int32_t i = 0; i < 9; ++i) {
+  std::uniform_real_distribution<float> distribution(0.0f, 1.0f);*/
+  Eigen::Matrix3f result = Eigen::Matrix3f::Identity();
+/*  for(int32_t i = 0; i < 9; ++i) {
     result(i / 3, i % 3) = distribution(generator);
-  }
+  }*/
   return result;
 }
 
