@@ -15,7 +15,8 @@ using CudaTriangle = Eigen::Vector3f*;
 using CudaConstTriangle = Eigen::Vector3f const*;
 using Triangles = std::deque<Triangle>;
 
-constexpr float   cgEpsilon        = 0.00001f;       // TODO consider if uniform epsilon suits all needs.
+constexpr float    cgEpsilonDistanceFromSide       = 0.01f;       // TODO consider if uniform epsilon suits all needs.
+constexpr float    cgEpsilonPlaneIntersectionSine = 0.00001f;
 constexpr uint32_t cgSignumZero     = 0u;
 constexpr uint32_t cgSignumPlus     = 1u;
 constexpr uint32_t cgSignumMinus    = 2u;
@@ -46,113 +47,17 @@ constexpr uint32_t cgSignumSelect1h = (cgSignumZero  << cgSignumShift1) | (cgSig
 
 // Otherwise select 2, no need for checking and thus no constants.
 
-constexpr uint32_t cgSignumCircumferenceA = (cgSignumZero << cgSignumShift0) | (cgSignumPlus << cgSignumShift1) | (cgSignumPlus << cgSignumShift2);
-constexpr uint32_t cgSignumCircumferenceB = (cgSignumZero << cgSignumShift0) | (cgSignumZero << cgSignumShift1) | (cgSignumPlus << cgSignumShift2);
-constexpr uint32_t cgSignumCircumferenceC = (cgSignumPlus << cgSignumShift0) | (cgSignumZero << cgSignumShift1) | (cgSignumPlus << cgSignumShift2);
-constexpr uint32_t cgSignumCircumferenceD = (cgSignumPlus << cgSignumShift0) | (cgSignumZero << cgSignumShift1) | (cgSignumZero << cgSignumShift2);
-constexpr uint32_t cgSignumCircumferenceE = (cgSignumPlus << cgSignumShift0) | (cgSignumPlus << cgSignumShift1) | (cgSignumZero << cgSignumShift2);
-constexpr uint32_t cgSignumCircumferenceF = (cgSignumZero << cgSignumShift0) | (cgSignumPlus << cgSignumShift1) | (cgSignumZero << cgSignumShift2);
-
 constexpr uint32_t calculateSignum(float const distances[3]) noexcept {
   uint32_t result = 0u;
   for(int32_t i = 0; i < 3; ++i) {
-    int32_t tmp = cgSignumZero;
-    if(distances[i] > cgEpsilon) {
-      tmp = cgSignumPlus;
-    }
-    else if(distances[i] < -cgEpsilon) {
-      tmp = cgSignumMinus;
-    }
-    else { // nothing to do
-    }
+    int32_t tmp = (distances[i] > cgEpsilonDistanceFromSide ? cgSignumPlus : cgSignumZero);
+    tmp = (distances[i] < -cgEpsilonDistanceFromSide ? cgSignumMinus : tmp);
     result |= tmp << (cgSignumShift1 * i);
   }
   return result;
 }
 
-void calculateNormals(Eigen::Vector2f const aShape[3], Eigen::Vector2f aNormals[3]) noexcept {
-  Eigen::Vector2f side = aShape[1] - aShape[0];
-  aNormals[0](0) = -side(1);
-  aNormals[0](1) = side(0);
-  float correction = 1.0f;
-  if(aNormals[0].dot(aShape[2]) < 0.0f) {
-    correction = -1.0f;                     // They shall point towards the interior.
-    aNormals[0] *= correction;
-  }
-  else { // nothing to do
-  }
-  side = aShape[2] - aShape[1];
-  aNormals[1](0) = -side(1) * correction;
-  aNormals[1](1) = side(0) * correction;
-  side = aShape[0] - aShape[2];
-  aNormals[2](0) = -side(1) * correction;
-  aNormals[2](1) = side(0) * correction;
-}
-
-bool doesTouchOther(uint32_t const aSignums) noexcept {
-  bool result = (aSignums == cgSignumAllPlus
-  || aSignums == cgSignumCircumferenceA
-  || aSignums == cgSignumCircumferenceB
-  || aSignums == cgSignumCircumferenceC
-  || aSignums == cgSignumCircumferenceD
-  || aSignums == cgSignumCircumferenceE
-  || aSignums == cgSignumCircumferenceF);
-if(result) std::cout << "coplanar circumference or interior\n";
-  return result;
-}
-
-bool hasCommonPoint(Eigen::Vector2f aShape1[3], Eigen::Vector2f aShape2[3]) noexcept {
-  Eigen::Vector2f normals1[3]; // i : i->(i+1)%3
-  Eigen::Vector2f normals2[3];
-  calculateNormals(aShape1, normals1); // Normal vectors point to the center.
-  calculateNormals(aShape2, normals2);
-  bool result = false;
-  for(int32_t indexCorner = 0; indexCorner < 3; ++indexCorner) {
-    float distancesCornerFromEachSideOfShape1[3];
-    float distancesCornerFromEachSideOfShape2[3];
-    for(int32_t indexSide = 0; indexSide < 3; ++indexSide) {
-      distancesCornerFromEachSideOfShape2[indexSide] = normals2[indexSide].dot(aShape1[indexCorner] - aShape2[indexSide]);
-      distancesCornerFromEachSideOfShape1[indexSide] = normals1[indexSide].dot(aShape2[indexCorner] - aShape1[indexSide]);
-    }
-    result = result || doesTouchOther(calculateSignum(distancesCornerFromEachSideOfShape2));
-    result = result || doesTouchOther(calculateSignum(distancesCornerFromEachSideOfShape1));   // True if one corner is on the sides, corners or interior of the other triangle.
-    // Don't break out since it won't use on CUDA.
-  }
-  return result;
-}
-    
-bool hasCommonPoint(CudaConstTriangle const aShape1, CudaConstTriangle const aShape2, Eigen::Vector3f const &aShape1normal, Eigen::Vector3f const &aShape2normal) noexcept { // coplanar
-  Eigen::Vector3f normal;
-  if(aShape1normal.dot(aShape2normal) > 0.0f) {
-    normal = aShape1normal + aShape2normal;
-  }
-  else {
-    normal = aShape1normal - aShape2normal;
-  }
-  int32_t indexX = 1;
-  int32_t indexY = 2;
-  float abs1 = fabs(normal(1)); // Looking for the biggest projection. TODO fabsf for CUDA
-  if(abs1 > fabs(normal(0))) {
-    indexX = 0;
-  }
-  else { // nothing to do
-  }
-  if(fabs(normal(2)) > abs1) {
-    indexX = 0;
-    indexY = 1;
-  }
-  else { // nothing to do
-  }
-  Eigen::Vector2f shape1[3];
-  Eigen::Vector2f shape2[3];
-  for(int32_t i = 0; i < 3; ++i) {
-    shape1[i](0) = aShape1[i](indexX);  // Project 3D triangle to axis-parallel plane.
-    shape1[i](1) = aShape1[i](indexY);
-    shape2[i](0) = aShape2[i](indexX);
-    shape2[i](1) = aShape2[i](indexY);
-  }
-  return hasCommonPoint(shape1, shape2);
-}
+// TODO consider Eigen3 for CUDA register usage. Probably it does not use indexing inside.
 
 void calculateIntersectionParameter(
   CudaConstTriangle const aShape
@@ -220,7 +125,7 @@ bool hasCommonPoint(CudaConstTriangle const aShape1, CudaConstTriangle const aSh
   }
   else {
     Eigen::Vector3f intersectionVector = shape1normal.cross(shape2normal);
-    if(intersectionVector.norm() > cgEpsilon && signumShape1FromPlane2 != cgSignumAllZero && signumShape2FromPlane1 != cgSignumAllZero) { // Real intersection, planes are not identical, and both triangles touch the common line.
+    if(fabs(intersectionVector.norm()) > cgEpsilonPlaneIntersectionSine && signumShape1FromPlane2 != cgSignumAllZero && signumShape2FromPlane1 != cgSignumAllZero) { // Real intersection, planes are not identical, and both triangles touch the common line.
       intersectionVector.normalize();
       float intersectionParameterAshape1;
       float intersectionParameterBshape1;
@@ -238,31 +143,30 @@ bool hasCommonPoint(CudaConstTriangle const aShape1, CudaConstTriangle const aSh
       }
       else { // nothing to do
       }
-      if(intersectionParameterAshape1 - cgEpsilon <= intersectionParameterAshape2 && intersectionParameterAshape2 <= intersectionParameterBshape1 + cgEpsilon // Epsilons make possible to check for triangles with corner-corner or corner-edge touch.
-      || intersectionParameterAshape1 - cgEpsilon <= intersectionParameterBshape2 && intersectionParameterBshape2 <= intersectionParameterBshape1 + cgEpsilon
-      || intersectionParameterAshape2 - cgEpsilon <= intersectionParameterAshape1 && intersectionParameterAshape1 <= intersectionParameterBshape2 + cgEpsilon
-      || intersectionParameterAshape2 - cgEpsilon <= intersectionParameterBshape1 && intersectionParameterBshape1 <= intersectionParameterBshape2 + cgEpsilon) {
+      if(intersectionParameterAshape1 - cgEpsilonDistanceFromSide <= intersectionParameterAshape2 && intersectionParameterAshape2 <= intersectionParameterBshape1 + cgEpsilonDistanceFromSide // Epsilons make possible to check for triangles with corner-corner or corner-edge touch.
+      || intersectionParameterAshape1 - cgEpsilonDistanceFromSide <= intersectionParameterBshape2 && intersectionParameterBshape2 <= intersectionParameterBshape1 + cgEpsilonDistanceFromSide
+      || intersectionParameterAshape2 - cgEpsilonDistanceFromSide <= intersectionParameterAshape1 && intersectionParameterAshape1 <= intersectionParameterBshape2 + cgEpsilonDistanceFromSide
+      || intersectionParameterAshape2 - cgEpsilonDistanceFromSide <= intersectionParameterBshape1 && intersectionParameterBshape1 <= intersectionParameterBshape2 + cgEpsilonDistanceFromSide) {
 std::cout << "on intersecting line\n";
         result = true;
       }
-      else { // nothing to do
+      else { // Nothing to do
       }
     }
-    else {
-      result = hasCommonPoint(aShape1, aShape2, shape1normal, shape2normal); // Coplanar triangles
-    }
+    else { // Nothing to do, because we ignore coplanar triangles.
+    }     //  Meshes are assumed to be continuous, so other triangles will yield the necessary checks.
   }
   return result;
 }
 
 Eigen::Matrix3f randomTransform() {
-/*  std::default_random_engine generator;
-  generator.seed((std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::time_point::min()).count());
-  std::uniform_real_distribution<float> distribution(0.0f, 1.0f);*/
-  Eigen::Matrix3f result = Eigen::Matrix3f::Identity();
-/*  for(int32_t i = 0; i < 9; ++i) {
+  std::default_random_engine generator;
+//  generator.seed((std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::time_point::min()).count());
+  std::uniform_real_distribution<float> distribution(0.1f, 1.0f);
+  Eigen::Matrix3f result;
+  for(int32_t i = 0; i < 9; ++i) {
     result(i / 3, i % 3) = distribution(generator);
-  }*/
+  }
   return result;
 }
 
