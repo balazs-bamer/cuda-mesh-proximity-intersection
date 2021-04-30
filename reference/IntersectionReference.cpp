@@ -15,7 +15,7 @@ using CudaTriangle = Eigen::Vector3f*;
 using CudaConstTriangle = Eigen::Vector3f const*;
 using Triangles = std::deque<Triangle>;
 
-constexpr float    cgEpsilonDistanceFromSide       = 0.01f;       // TODO consider if uniform epsilon suits all needs.
+constexpr float    cgEpsilonDistanceFromSide      = 0.01f;       // TODO use triangle-size-dependent value here
 constexpr float    cgEpsilonPlaneIntersectionSine = 0.00001f;
 constexpr uint32_t cgSignumZero     = 0u;
 constexpr uint32_t cgSignumPlus     = 1u;
