@@ -17,10 +17,9 @@ using CudaTriangle = Vertex*;
 using CudaConstTriangle = Vertex const*;
 using Mesh = std::vector<Triangle>;
 
-constexpr int32_t  cgApproximateInitialPointsPerDimension =  8;
-constexpr float    cgApproximateMaxJumpLimitFactor        =  1.0f;
+constexpr int32_t  cgApproximateDivisionPerDimensionMin   =  5;
+constexpr int32_t  cgApproximateDivisionPerDimensionMax   = 12;
 constexpr float    cgApproximateLeaveInPlaceFactor        =  0.01f;
-constexpr float    cgApproximateRate                      =  0.5f;
 constexpr size_t   cgApproximateFinalPointCount           = 32u;
 constexpr float    cgEpsilonDistanceFromSideFactor        =  0.001f;
 constexpr float    cgEpsilonPlaneIntersectionSine         =  0.001f;
@@ -190,7 +189,7 @@ auto readMesh(std::string const &aFilename, Eigen::Vector3f aTranslation, Eigen:
       for(int32_t i = 0; i < 3; ++i) {
         in(i) = coords[i];
       }
-      triangle[indexCorner] = aTransform * (in + aTranslation);
+      triangle[indexCorner] = /*aTransform **/ (in + aTranslation);
     }
     result.push_back(triangle);
   }
@@ -243,11 +242,17 @@ void intersect(Mesh const &aMesh1, Mesh const &aMesh2, float const aMedianSideSi
   std::cout << "intersects: " << intersectionCount << '\n';
 }
 
+// AABB is not too beneficial here, because initially the meshes are parallel to AABB and many approximation point
+// get into neighbouring cells. Some rotated BB is much better, it enables only 16 points to be calculated.
+// TODO calculate main plane which is parallel to most reference points and rotate it before AABB calculation.
+// When finished, rotate back the result.
+// Or find a distraction algorithm within reference points.
 auto approximate(Mesh const aMesh, float const aMedianSideSizeHarmonic) {
   std::deque<Vertex> all;
   std::deque<Vertex> reference;
   Vertex min{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
   Vertex max{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
+  Vertex centerOfGravity(0.0f, 0.0f, 0.0f);
   float limit = aMedianSideSizeHarmonic * cgApproximateLeaveInPlaceFactor;
   for(auto const &triangle : aMesh) {
     for(auto const &vertex : triangle) {
@@ -266,68 +271,50 @@ auto approximate(Mesh const aMesh, float const aMedianSideSizeHarmonic) {
       }
       if(!was) {
         reference.push_back(vertex);
+        centerOfGravity += vertex;
       }
       else { // nothing to do
       }
     }
   }
-  float dx = (max(0) - min(0)) / (cgApproximateInitialPointsPerDimension - 1);
-  float dy = (max(1) - min(1)) / (cgApproximateInitialPointsPerDimension - 1);
-  float dz = (max(2) - min(2)) / (cgApproximateInitialPointsPerDimension - 1);
-  float x = min(0);
-  for(int32_t i = 0; i < cgApproximateInitialPointsPerDimension; ++i) {
-    float y = min(1);
-    for(int32_t j = 0; j < cgApproximateInitialPointsPerDimension; ++j) {
-      float z = min(2);
-      for(int32_t k = 0; k < cgApproximateInitialPointsPerDimension; ++k) {
-        all.push_back(Vertex(x, y, z));
-        z += dz;
-      }
-      y += dy;
+  centerOfGravity /= reference.size();
+  std::map<int32_t, Vertex> candidate;
+  for(int32_t divisionPerDimension = cgApproximateDivisionPerDimensionMin; divisionPerDimension <= cgApproximateDivisionPerDimensionMax; ++divisionPerDimension) {
+    candidate.clear();
+    float dx = (max(0) - min(0)) / divisionPerDimension;
+    float dy = (max(1) - min(1)) / divisionPerDimension;
+    float dz = (max(2) - min(2)) / divisionPerDimension;
+    std::map<float, Vertex> sorted;
+    for (auto const &ref : reference) {
+      sorted.emplace(std::pair{-((ref - centerOfGravity).norm()), ref});
     }
-    x += dx;
-  }
-  float largestJump = aMedianSideSizeHarmonic * cgApproximateMaxJumpLimitFactor * 2.0f;
-  while(largestJump > aMedianSideSizeHarmonic * cgApproximateMaxJumpLimitFactor) {
-    largestJump = 0.0f;
-    for(auto &point : all) {
-      Vertex displacement(0.0f, 0.0f, 0.0f);
-      bool arrived = false;
-      float minDistance = std::numeric_limits<float>::max();
-      for(auto const &ref : reference) {
-        Vertex attraction = ref - point;
-        float distance = attraction.norm();
-        if(distance < limit) {
-          arrived = true;
-          break;
+    for (auto const &item : sorted) {
+      if (candidate.size() == cgApproximateFinalPointCount) {
+        break;
+      }
+      else {
+        Vertex diff = item.second - min;
+        int32_t code = static_cast<int32_t>(diff(0) / dx)
+                       + static_cast<int32_t>(diff(1) / dy) * 100 // divisionPerDimension
+                       + static_cast<int32_t>(diff(2) / dz) * 100 * 100; // divisionPerDimension * divisionPerDimenmsion
+        if (candidate.find(code) == candidate.end()) {
+          candidate.emplace(std::pair{code, item.second});
         }
-        else {
-          minDistance = std::min(minDistance, distance);
-          displacement += attraction / (distance * distance);
+        else { // nothing to do
         }
       }
-      float howMuch = displacement.norm();
-      if(!arrived && howMuch > limit) {
-        float jump = minDistance * cgApproximateRate;
-        point += displacement / howMuch * jump;
-        largestJump = std::max(largestJump, jump);
-      }
-      else { // nothing to do
-      }
     }
-    std::cout << "jump: " << largestJump << '\n';
-  }
-  std::map<float, Vertex> sorted;
-  for(auto const &point : all) {
-    float distance = std::numeric_limits<float>::max();
-    for(auto const &ref : reference) {
-      distance = std::min(distance, (ref - point).norm());
+    if(candidate.size() == cgApproximateFinalPointCount ) {
+      break;
     }
-    sorted.emplace(std::pair{distance, point});
+    else { // nothing to do
+    }
   }
   std::vector<Vertex> result;
   result.reserve(cgApproximateFinalPointCount);
-  std::for_each_n(sorted.begin(), cgApproximateFinalPointCount, [&result](auto const &item){ result.push_back(item.second); });
+  for(auto const &item : candidate) {
+    result.push_back(item.second);
+  }
   return result;
 }
 
