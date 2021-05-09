@@ -21,7 +21,7 @@ using CudaConstTriangle = Vertex const*;
 using Mesh = std::vector<Triangle>;
 
 constexpr float    cgApproximateLeaveInPlaceFactor =    0.01f;
-constexpr uint32_t cgApproximateResultSize         =   16u;
+constexpr uint32_t cgApproximateResultSize         =   16u;    // Could go up to 32, but 16 is probably good enough.
 constexpr int32_t  cgApproximateIterations         = 2222u;
 constexpr float    cgApproximateTemperatureFactor  =    0.01f;
 constexpr float    cgEpsilonDistanceFromSideFactor =    0.001f;
@@ -247,7 +247,8 @@ float calculateDistanceSum(std::unordered_set<uint32_t> const &aIndices, std::de
   float sum;
   for(uint32_t i = 0u; i < cgApproximateResultSize; ++i) {
     for(uint32_t j = 0u; j < i; ++j) {
-      sum += (selection[i] - selection[j]).norm();
+      auto diffSquared = (selection[i] - selection[j]).squaredNorm();
+      sum += -1.0f / diffSquared;
     }
   }
   return sum;
@@ -275,6 +276,7 @@ std::vector<Vertex> approximate(Mesh const aMesh, float const aMedianSideSizeHar
       }
     }
   }
+  std::cout << "ref: " << reference.size() << '\n';
   std::default_random_engine generator;
   generator.seed((std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::time_point::min()).count());
   std::uniform_int_distribution<uint32_t> distributionAll(0, reference.size() - 1);
@@ -292,7 +294,7 @@ std::vector<Vertex> approximate(Mesh const aMesh, float const aMedianSideSizeHar
   std::unordered_set<uint32_t> bestIndices = actualIndices;
   float actualDistancesSum = calculateDistanceSum(actualIndices, reference);
   float bestDistancesSum = actualDistancesSum;
-  float initialTemperature = cgApproximateTemperatureFactor * aMedianSideSizeHarmonic * reference.size() * reference.size();
+  float initialTemperature = cgApproximateTemperatureFactor / aMedianSideSizeHarmonic / aMedianSideSizeHarmonic * reference.size() * reference.size();
   for(int32_t i = 0u; i < cgApproximateIterations; ++i) {
     auto candidateIndices = actualIndices;
     uint32_t toRemoveIndex = distributionSubset(generator);
