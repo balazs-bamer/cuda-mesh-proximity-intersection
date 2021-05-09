@@ -9,20 +9,23 @@
 #include <vector>
 #include <fstream>
 #include <iostream>
+#include <unordered_set>
 #include <Eigen/Dense>
 
 using Vertex = Eigen::Vector3f;
+using Quaternion = Eigen::Quaternion<float>;
+using Transform = Eigen::Transform<float, 3, Eigen::Affine>;
 using Triangle = std::array<Vertex, 3u>;
 using CudaTriangle = Vertex*;
 using CudaConstTriangle = Vertex const*;
 using Mesh = std::vector<Triangle>;
 
-constexpr int32_t  cgApproximateDivisionPerDimensionMin   =  5;
-constexpr int32_t  cgApproximateDivisionPerDimensionMax   = 12;
-constexpr float    cgApproximateLeaveInPlaceFactor        =  0.01f;
-constexpr size_t   cgApproximateFinalPointCount           = 32u;
-constexpr float    cgEpsilonDistanceFromSideFactor        =  0.001f;
-constexpr float    cgEpsilonPlaneIntersectionSine         =  0.001f;
+constexpr float    cgApproximateLeaveInPlaceFactor =    0.01f;
+constexpr uint32_t cgApproximateResultSize         =   16u;
+constexpr int32_t  cgApproximateIterations         = 2222u;
+constexpr float    cgApproximateTemperatureFactor  =    0.01f;
+constexpr float    cgEpsilonDistanceFromSideFactor =    0.001f;
+constexpr float    cgEpsilonPlaneIntersectionSine  =    0.001f;
 constexpr uint32_t cgSignumZero     = 0u;
 constexpr uint32_t cgSignumPlus     = 1u;
 constexpr uint32_t cgSignumMinus    = 2u;
@@ -225,13 +228,6 @@ void writeMesh(Mesh const &aMesh1, Mesh const &aMesh2, char const * const aFilen
   out << "endsolid Exported from Blender-2.82 (sub 7)\n";
 }
 
-float harmonic(Triangle const &aTriangle) {
-  float a = (aTriangle[0] - aTriangle[1]).norm();
-  float b = (aTriangle[1] - aTriangle[2]).norm();
-  float c = (aTriangle[2] - aTriangle[0]).norm();
-  return 3.0f / (1.0f / a + 1.0f / b + 1.0f / c);
-}
-
 void intersect(Mesh const &aMesh1, Mesh const &aMesh2, float const aMedianSideSizeHarmonic) {
   size_t intersectionCount = 0u;
   for(auto const &item1 : aMesh1) {
@@ -242,24 +238,27 @@ void intersect(Mesh const &aMesh1, Mesh const &aMesh2, float const aMedianSideSi
   std::cout << "intersects: " << intersectionCount << '\n';
 }
 
-// AABB is not too beneficial here, because initially the meshes are parallel to AABB and many approximation point
-// get into neighbouring cells. Some rotated BB is much better, it enables only 16 points to be calculated.
-// TODO calculate main plane which is parallel to most reference points and rotate it before AABB calculation.
-// When finished, rotate back the result.
-// Or find a distraction algorithm within reference points.
-auto approximate(Mesh const aMesh, float const aMedianSideSizeHarmonic) {
+float calculateDistanceSum(std::unordered_set<uint32_t> const &aIndices, std::deque<Vertex> const &aVertices) {
+  std::vector<Vertex> selection;
+  selection.reserve(cgApproximateResultSize);
+  for(auto const &i : aIndices) {
+    selection.push_back(aVertices[i]);
+  }
+  float sum;
+  for(uint32_t i = 0u; i < cgApproximateResultSize; ++i) {
+    for(uint32_t j = 0u; j < i; ++j) {
+      sum += (selection[i] - selection[j]).norm();
+    }
+  }
+  return sum;
+}
+
+std::vector<Vertex> approximate(Mesh const aMesh, float const aMedianSideSizeHarmonic) {
   std::deque<Vertex> all;
   std::deque<Vertex> reference;
-  Vertex min{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
-  Vertex max{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
-  Vertex centerOfGravity(0.0f, 0.0f, 0.0f);
   float limit = aMedianSideSizeHarmonic * cgApproximateLeaveInPlaceFactor;
   for(auto const &triangle : aMesh) {
     for(auto const &vertex : triangle) {
-      for(size_t i = 0u; i < 3u; ++i) {
-        min(i) = std::min(min(i), vertex(i));
-        max(i) = std::max(max(i), vertex(i));
-      }
       bool was = false;
       for(auto const &ref : reference) {
         if((ref - vertex).norm() < limit) {
@@ -271,76 +270,100 @@ auto approximate(Mesh const aMesh, float const aMedianSideSizeHarmonic) {
       }
       if(!was) {
         reference.push_back(vertex);
-        centerOfGravity += vertex;
       }
       else { // nothing to do
       }
     }
   }
-  centerOfGravity /= reference.size();
-  std::map<int32_t, Vertex> candidate;
-  for(int32_t divisionPerDimension = cgApproximateDivisionPerDimensionMin; divisionPerDimension <= cgApproximateDivisionPerDimensionMax; ++divisionPerDimension) {
-    candidate.clear();
-    float dx = (max(0) - min(0)) / divisionPerDimension;
-    float dy = (max(1) - min(1)) / divisionPerDimension;
-    float dz = (max(2) - min(2)) / divisionPerDimension;
-    std::map<float, Vertex> sorted;
-    for (auto const &ref : reference) {
-      sorted.emplace(std::pair{-((ref - centerOfGravity).norm()), ref});
+  std::default_random_engine generator;
+  generator.seed((std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::time_point::min()).count());
+  std::uniform_int_distribution<uint32_t> distributionAll(0, reference.size() - 1);
+  std::uniform_int_distribution<uint32_t> distributionSubset(0, cgApproximateResultSize - 1);
+  std::uniform_real_distribution<float> distributionFloat(0.0f, 1.0f);
+  std::unordered_set<uint32_t> actualIndices;
+  while(actualIndices.size() < cgApproximateResultSize) {
+    uint32_t randomIndex = distributionAll(generator);
+    if(actualIndices.find(randomIndex) == actualIndices.end()) {
+      actualIndices.insert(randomIndex);
     }
-    for (auto const &item : sorted) {
-      if (candidate.size() == cgApproximateFinalPointCount) {
+    else { // nothing to do
+    }
+  }
+  std::unordered_set<uint32_t> bestIndices = actualIndices;
+  float actualDistancesSum = calculateDistanceSum(actualIndices, reference);
+  float bestDistancesSum = actualDistancesSum;
+  float initialTemperature = cgApproximateTemperatureFactor * aMedianSideSizeHarmonic * reference.size() * reference.size();
+  for(int32_t i = 0u; i < cgApproximateIterations; ++i) {
+    auto candidateIndices = actualIndices;
+    uint32_t toRemoveIndex = distributionSubset(generator);
+    auto thisOne = candidateIndices.begin();
+    for(uint32_t j = 0u; j < toRemoveIndex; ++j) {
+      ++thisOne;
+    }
+    candidateIndices.erase(thisOne);
+    while(true) {
+      uint32_t toInsert = distributionAll(generator);
+      if(candidateIndices.find(toInsert) == candidateIndices.end()) {
+        candidateIndices.insert(toInsert);
         break;
       }
-      else {
-        Vertex diff = item.second - min;
-        int32_t code = static_cast<int32_t>(diff(0) / dx)
-                       + static_cast<int32_t>(diff(1) / dy) * 100 // divisionPerDimension
-                       + static_cast<int32_t>(diff(2) / dz) * 100 * 100; // divisionPerDimension * divisionPerDimenmsion
-        if (candidate.find(code) == candidate.end()) {
-          candidate.emplace(std::pair{code, item.second});
-        }
-        else { // nothing to do
-        }
+      else { // nothing to do
       }
     }
-    if(candidate.size() == cgApproximateFinalPointCount ) {
-      break;
+    float candidateDistancesSum = calculateDistanceSum(candidateIndices, reference);
+    if(candidateDistancesSum > bestDistancesSum) {
+      bestDistancesSum = candidateDistancesSum;
+      bestIndices = candidateIndices;
+    }
+    else { // nothing to do
+    }
+    float diff = actualDistancesSum - candidateDistancesSum;
+    float temperature = initialTemperature / (i + 1);
+    if(diff < 0.0f || distributionFloat(generator) < ::expf(-diff / temperature)) {
+      actualIndices = candidateIndices;
+      actualDistancesSum = candidateDistancesSum;
     }
     else { // nothing to do
     }
   }
   std::vector<Vertex> result;
-  result.reserve(cgApproximateFinalPointCount);
-  for(auto const &item : candidate) {
-    result.push_back(item.second);
+  result.reserve(cgApproximateResultSize);
+  for(auto const &i : bestIndices) {
+    result.push_back(reference[i]);
   }
   return result;
 }
 
-float calculateMedianSideSizeHarmonic(Mesh const &aMesh1, Mesh const &aMesh2) {
+auto harmonic(Triangle const &aTriangle) {
+  float a = (aTriangle[0] - aTriangle[1]).norm();
+  float b = (aTriangle[1] - aTriangle[2]).norm();
+  float c = (aTriangle[2] - aTriangle[0]).norm();
+  return std::pair{ 3.0f / (1.0f / a + 1.0f / b + 1.0f / c), std::max({a, b, c})};
+}
+
+auto calculateMedianSideSizeHarmonicAndMaxSide(Mesh const &aMesh1, Mesh const &aMesh2) {
   std::deque<float> harmonics;
-  float average = 0.0f;
+  float maxSide1 = 0.0f;
   for(auto const &item1 : aMesh1) {
-    auto h = harmonic(item1);
-    harmonics.push_back(h);
-    average += h;
+    auto [harm, max] = harmonic(item1);
+    harmonics.push_back(harm);
+    maxSide1 = std::max(maxSide1, max);
   }
+  float maxSide2 = 0.0f;
   for(auto const &item2 : aMesh2) {
-    auto h = harmonic(item2);
-    harmonics.push_back(h);
-    average += h;
+    auto [harm, max] = harmonic(item2);
+    harmonics.push_back(harm);
+    maxSide2 = std::max(maxSide2, max);
   }
-  average /= harmonics.size();
   std::sort(harmonics.begin(), harmonics.end());
   float median = harmonics[harmonics.size() / 2u];
-  std::cout << "1: " << aMesh1.size() << " 2: " << aMesh2.size() << " min:" << harmonics.front() << " avg: " << average << " med: " << harmonics[harmonics.size() / 2u] << " max: " << harmonics.back() << '\n';
-  return median;
+  std::cout << "1: " << aMesh1.size() << " 2: " << aMesh2.size() << " med: " << median << " max: " << maxSide1 << ' ' << maxSide2 << '\n';
+  return std::pair(median, std::min(maxSide1, maxSide2)); // In general case, if the meshes are farther apart than the less of the maximum sides, they definitely don't intersect.
 }
 
 Mesh toMesh(std::vector<Vertex> const aPoints, float const aMedianSizeHarmonic) {
   Mesh result;
-  float size = aMedianSizeHarmonic / 10.0f;
+  float size = aMedianSizeHarmonic / 5.0f;
   float cogShift = size / 4.0f;
   for(auto const &point : aPoints) {
     Vertex corner0(-cogShift, -cogShift, -cogShift);
@@ -355,10 +378,27 @@ Mesh toMesh(std::vector<Vertex> const aPoints, float const aMedianSizeHarmonic) 
   return result;
 }
 
+auto calculateDistance(std::vector<Vertex> const &aApproximate1, std::vector<Vertex> const &aApproximate2) {
+  float distance = std::numeric_limits<float>::max();
+  for(auto const &vertex1 : aApproximate1) {
+    for(auto const &vertex2 : aApproximate2) {
+      distance = std::min(distance, (vertex1 - vertex2).norm());
+    }
+  }
+  return distance;
+}
+
 void check(Mesh const &aMesh1, Mesh const &aMesh2) {
-  float medianSideSizeHarmonic = calculateMedianSideSizeHarmonic(aMesh1, aMesh2);
+  auto [medianSideSizeHarmonic, maxSide] = calculateMedianSideSizeHarmonicAndMaxSide(aMesh1, aMesh2);
   auto approximate1 = approximate(aMesh1, medianSideSizeHarmonic);
   auto approximate2 = approximate(aMesh2, medianSideSizeHarmonic);
+  auto distance = calculateDistance(approximate1, approximate2);
+  std::cout << "dist: " << distance << '\n';
+  if(distance < maxSide) {
+    intersect(aMesh1, aMesh2, medianSideSizeHarmonic);
+  }
+  else { // nothing to do
+  }
   writeMesh(toMesh(approximate1, medianSideSizeHarmonic), toMesh(approximate2, medianSideSizeHarmonic), "points.stl");
 }
 
