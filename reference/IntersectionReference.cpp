@@ -20,8 +20,15 @@ using CudaTriangle = Vertex*;
 using CudaConstTriangle = Vertex const*;
 using Mesh = std::vector<Triangle>;
 
+// usage ./IntersectionReference example23.in 
+
+constexpr float    cgPi                            =    3.1415926539f;
+constexpr int32_t  cgSphereSectors                 =    11;
+constexpr int32_t  cgSphereBelts                   =    5;
+constexpr float    cgCalculateSpheresInflate       =    0.51f;
+constexpr int32_t  cgCalculateSpheresNeighbours    =    3;
 constexpr float    cgApproximateLeaveInPlaceFactor =    0.01f;
-constexpr uint32_t cgApproximateResultSize         =   16u;    // Could go up to 32, but 16 is probably good enough.
+constexpr uint32_t cgApproximateResultSize         =   32u;
 constexpr int32_t  cgApproximateIterations         = 2222u;
 constexpr float    cgApproximateTemperatureFactor  =    0.01f;
 constexpr float    cgEpsilonDistanceFromSideFactor =    0.001f;
@@ -336,6 +343,41 @@ std::vector<Vertex> approximate(Mesh const aMesh, float const aMedianSideSizeHar
   return result;
 }
 
+std::vector<float> calculateSpheres(std::vector<Vertex> const &aPoints) {
+  Vertex aabb1{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+  Vertex aabb2{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
+  for(auto const &point : aPoints) {
+    for(size_t i = 0u; i < 3u; ++i) {
+      aabb1[i] = std::min(point[i], aabb1[i]);
+      aabb2[i] = std::max(point[i], aabb2[i]);
+    }
+  }
+  float max = (aabb2 - aabb1).norm();
+  
+  std::vector<float> result;
+  result.reserve(aPoints.size());
+  std::vector<float> distances(aPoints.size() - 1u);
+  for(auto const &point: aPoints) {
+    distances.clear();
+    for(auto const &other: aPoints) {
+      if(other != point) {
+        distances.push_back(-(point - other).norm());
+      }
+      else { // nothing to do
+      }
+    }
+    std::make_heap(distances.begin(), distances.end());
+    float nth;
+    for(int32_t i = 0; i < cgCalculateSpheresNeighbours; ++i) {
+      std::pop_heap(distances.begin(), distances.end());
+      nth = -distances.back();
+      distances.pop_back();
+    }
+    result.push_back(nth * cgCalculateSpheresInflate);
+  }
+  return result;
+}
+
 auto harmonic(Triangle const &aTriangle) {
   float a = (aTriangle[0] - aTriangle[1]).norm();
   float b = (aTriangle[1] - aTriangle[2]).norm();
@@ -363,7 +405,7 @@ auto calculateMedianSideSizeHarmonicAndMaxSide(Mesh const &aMesh1, Mesh const &a
   return std::pair(median, std::min(maxSide1, maxSide2)); // In general case, if the meshes are farther apart than the less of the maximum sides, they definitely don't intersect.
 }
 
-Mesh toMesh(std::vector<Vertex> const aPoints, float const aMedianSizeHarmonic) {
+Mesh toTetras(std::vector<Vertex> const& aPoints, float const aMedianSizeHarmonic) {
   Mesh result;
   float size = aMedianSizeHarmonic / 5.0f;
   float cogShift = size / 4.0f;
@@ -376,6 +418,65 @@ Mesh toMesh(std::vector<Vertex> const aPoints, float const aMedianSizeHarmonic) 
     result.push_back({point + corner0, point + corner1, point + corner3});
     result.push_back({point + corner0, point + corner2, point + corner3});
     result.push_back({point + corner1, point + corner2, point + corner3});
+  }
+  return result;
+}
+
+Mesh getUnitSphere() {
+  Mesh result;
+  result.reserve(cgSphereBelts * 2 * cgSphereSectors);
+  float sectorAngleHalf = cgPi / cgSphereSectors;
+  float sectorAngleFull = sectorAngleHalf * 2.0f;
+  float beltAngle       = cgPi / (cgSphereBelts + 1.0f);
+  float bias = 0.0f;
+  float beltAngleUp = 0.0f;
+  float beltAngleMiddle = beltAngle;
+  float beltAngleDown = 2.0f * beltAngle;
+  float beltRadiusUp = 0.0f;
+  float beltRadiusMiddle = std::sin(beltAngleMiddle);
+  float beltRadiusDown = std::sin(beltAngleDown);
+  float beltZup = 1.0f;
+  float beltZmiddle = std::cos(beltAngleMiddle);
+  float beltZdown = std::cos(beltAngleDown);
+  for(int32_t belt = 0; belt < cgSphereBelts; ++belt) {
+    float sectorAngleUpDown = bias + sectorAngleHalf;
+    float sectorAngleMiddle1 = bias + 0.0f;
+    float sectorAngleMiddle2 = bias + sectorAngleFull;
+    for(int32_t sector = 0; sector < cgSphereSectors; ++sector) {
+      Vertex corner1(beltRadiusUp * std::sin(sectorAngleUpDown), beltRadiusUp * std::cos(sectorAngleUpDown), beltZup);
+      Vertex corner2(beltRadiusMiddle * std::sin(sectorAngleMiddle1), beltRadiusMiddle * std::cos(sectorAngleMiddle1), beltZmiddle);
+      Vertex corner3(beltRadiusMiddle * std::sin(sectorAngleMiddle2), beltRadiusMiddle * std::cos(sectorAngleMiddle2), beltZmiddle);
+      result.push_back({corner1, corner2, corner3});
+      corner1 = {beltRadiusDown * std::sin(sectorAngleUpDown), beltRadiusDown * std::cos(sectorAngleUpDown), beltZdown};
+      result.push_back({corner2, corner3, corner1});
+      sectorAngleUpDown += sectorAngleFull;
+      sectorAngleMiddle1 = sectorAngleMiddle2;
+      sectorAngleMiddle2 += sectorAngleFull;
+    }
+    beltAngleUp = beltAngleMiddle;
+    beltAngleMiddle = beltAngleDown;
+    beltAngleDown += beltAngle;
+    beltRadiusUp = beltRadiusMiddle;
+    beltRadiusMiddle = beltRadiusDown;
+    beltRadiusDown = std::sin(beltAngleDown);
+    beltZup = beltZmiddle;
+    beltZmiddle = beltZdown;
+    beltZdown = std::cos(beltAngleDown);
+    bias += sectorAngleHalf;
+  }
+  return result;
+}
+
+Mesh toSpheres(std::vector<Vertex> const& aPoints, std::vector<float> const& aRadii) {
+  static auto unitSphere = getUnitSphere();
+  Mesh result;
+  result.reserve(unitSphere.size() * aPoints.size());
+  for(size_t i = 0u; i < aPoints.size(); ++i) {
+    auto &point = aPoints[i];
+    auto &radius = aRadii[i];
+    for(auto const &face : unitSphere) {
+      result.push_back({face[0] * radius + point, face[1] * radius + point, face[2] * radius + point});
+    }
   }
   return result;
 }
@@ -394,6 +495,8 @@ void check(Mesh const &aMesh1, Mesh const &aMesh2) {
   auto [medianSideSizeHarmonic, maxSide] = calculateMedianSideSizeHarmonicAndMaxSide(aMesh1, aMesh2);
   auto approximate1 = approximate(aMesh1, medianSideSizeHarmonic);
   auto approximate2 = approximate(aMesh2, medianSideSizeHarmonic);
+  auto sphereSizes1 = calculateSpheres(approximate1);
+  auto sphereSizes2 = calculateSpheres(approximate2);
   auto distance = calculateDistance(approximate1, approximate2);
   std::cout << "dist: " << distance << '\n';
   if(distance < maxSide) {
@@ -401,7 +504,8 @@ void check(Mesh const &aMesh1, Mesh const &aMesh2) {
   }
   else { // nothing to do
   }
-  writeMesh(toMesh(approximate1, medianSideSizeHarmonic), toMesh(approximate2, medianSideSizeHarmonic), "points.stl");
+  writeMesh(toTetras(approximate1, medianSideSizeHarmonic), toTetras(approximate2, medianSideSizeHarmonic), "points.stl");
+  writeMesh(toSpheres(approximate1, sphereSizes1), toSpheres(approximate2, sphereSizes2), "spheres.stl");
 }
 
 int main(int argc, char **argv) {
