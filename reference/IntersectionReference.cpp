@@ -2,7 +2,6 @@
 
 #include "../../../repos/stl_reader/stl_reader.h"
 #include <map>
-#include <list>
 #include <array>
 #include <deque>
 #include <chrono>
@@ -45,29 +44,41 @@ Eigen::Matrix3f randomTransform() {
   return result;
 }
 
-void divideLargeTriangles(std::list<Triangle> &aMesh) {
-  for(auto &triangle : aMesh) {
+std::deque<Triangle> divideLargeTriangles(std::deque<Triangle> &aMesh) {
+  std::deque<Triangle> result;
+  for(auto const &triangle : aMesh) {
     float maxSide = (triangle[0] - triangle[1]).norm();
     maxSide = std::max(maxSide, (triangle[0] - triangle[2]).norm());
     maxSide = std::max(maxSide, (triangle[1] - triangle[2]).norm());
-    while(maxSide > cgMaxTriangleSide) {
-      auto divider0 = (triangle[1] + triangle[2]) / 2.0f;
-      auto divider1 = (triangle[0] + triangle[2]) / 2.0f;
-      auto divider2 = (triangle[1] + triangle[0]) / 2.0f;
-      auto original1 = triangle[1];
-      auto original2 = triangle[2];
-      triangle[1] = divider2;
-      triangle[2] = divider1;
-      aMesh.push_back({divider1, divider0, original2});
-      aMesh.push_back({divider0, divider2, original1});
-      aMesh.push_back({divider0, divider1, divider2});
-      maxSide /= 2.0f;
+    int32_t divisor = static_cast<int32_t>(std::ceil(maxSide / cgMaxTriangleSide));
+    auto vector01 = (triangle[1] - triangle[0]) / divisor;
+    auto vector02 = (triangle[2] - triangle[0]) / divisor;
+    auto lineBase = triangle[0];
+    auto base0 = lineBase;
+    auto base1 = (divisor > 1) ? (base0 + vector01) : triangle[1];
+    auto base2 = (divisor > 1) ? (base0 + vector02) : triangle[2];
+    for(int i = 0; i < divisor - 1; ++i) {
+      for(int j = 0; j < divisor - i - 1; j++) {
+        result.push_back({base0, base1, base2});
+        auto base1next = base1 + vector02;
+        result.push_back({base1, base1next, base2});
+        base1 = base1next;
+        base0 = base2;
+        base2 += vector02;
+      }
+      result.push_back({base0, base1, base2});
+      lineBase += vector01;
+      base0 = lineBase;
+      base1 = base0 + vector01;
+      base2 = base0 + vector02;
     }
+    result.push_back({base0, triangle[1], base2});
   }
+  return result;
 }
 
 auto readMesh(std::string const &aFilename, Eigen::Vector3f aTranslation, Eigen::Matrix3f const &aTransform) {
-  std::list<Triangle> work;
+  std::deque<Triangle> work;
   stl_reader::StlMesh<float, int32_t> mesh(aFilename);
   for(int32_t indexTriangle = 0; indexTriangle < mesh.num_tris(); ++indexTriangle) {
     Triangle triangle;
@@ -82,7 +93,7 @@ auto readMesh(std::string const &aFilename, Eigen::Vector3f aTranslation, Eigen:
     work.push_back(triangle);
   }
   std::cout << "bef: " << work.size();
-  divideLargeTriangles(work);
+  work = divideLargeTriangles(work);
   std::cout << " aft: " << work.size() << '\n';
   return Mesh(work.cbegin(), work.cend());
 }
@@ -161,6 +172,8 @@ std::vector<Vertex> approximate(Mesh const aMesh, float const aMedianSideSizeHar
   std::uniform_int_distribution<uint32_t> distributionSubset(0, cgApproximateResultSize - 1);
   std::uniform_real_distribution<float> distributionFloat(0.0f, 1.0f);
   std::unordered_set<uint32_t> actualIndices;
+  std::cout << "ref size: " << reference.size();
+  size_t iterationsNeeded = 0u;                            // TODO slow and fails if reference.size() <~ cgApproximateResultSize
   while(actualIndices.size() < cgApproximateResultSize) {
     uint32_t randomIndex = distributionAll(generator);
     if(actualIndices.find(randomIndex) == actualIndices.end()) {
@@ -168,7 +181,9 @@ std::vector<Vertex> approximate(Mesh const aMesh, float const aMedianSideSizeHar
     }
     else { // nothing to do
     }
+    ++iterationsNeeded;
   }
+  std::cout << " iter needed: " << iterationsNeeded << '\n';
   std::unordered_set<uint32_t> bestIndices = actualIndices;
   float actualDistancesSum = calculateDistanceSum(actualIndices, reference);
   float bestDistancesSum = actualDistancesSum;
@@ -392,7 +407,7 @@ int main(int argc, char **argv) {
       auto transform = randomTransform();
       auto [mesh1, mesh2] = readMesh(argv[1], transform);
       writeMesh(mesh1, mesh2, "out.stl");
-      check(mesh1, mesh2);
+//      check(mesh1, mesh2);
     }
     catch(std::exception &e) {
       ret = 2;
