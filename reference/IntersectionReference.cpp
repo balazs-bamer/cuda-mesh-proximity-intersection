@@ -12,6 +12,8 @@
 #include <unordered_set>
 #include <Eigen/Dense>
 
+// Exact intersection calculation using triangles.
+
 using Vertex = Eigen::Vector3f;
 using Quaternion = Eigen::Quaternion<float>;
 using Transform = Eigen::Transform<float, 3, Eigen::Affine>;
