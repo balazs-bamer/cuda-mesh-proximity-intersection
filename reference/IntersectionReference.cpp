@@ -29,7 +29,7 @@ constexpr float    cgMaxTriangleSide               = cgMaxSphereRadius * 2.0f;
 constexpr float    cgCalculateSpheresInflate       =    0.51f;
 constexpr int32_t  cgCalculateSpheresNeighbours    =    3;
 constexpr float    cgApproximateLeaveInPlaceFactor =    0.01f;
-constexpr uint32_t cgApproximateResultSize         =   32u;       // TODO consider remove
+constexpr uint32_t cgApproximateResultSize         =   64u;       // TODO remove and use total surface to compute this value T = sqrt(s*(s-c)*(s-b)*(s-a))
 constexpr int32_t  cgApproximateIterations         = 2222u;
 constexpr float    cgApproximateTemperatureFactor  =    0.01f;
 
@@ -407,7 +407,7 @@ int main(int argc, char **argv) {
       auto transform = randomTransform();
       auto [mesh1, mesh2] = readMesh(argv[1], transform);
       writeMesh(mesh1, mesh2, "out.stl");
-//      check(mesh1, mesh2);
+      check(mesh1, mesh2);
     }
     catch(std::exception &e) {
       ret = 2;
