@@ -4,3 +4,9 @@
 *.ptx
 *.cubin
 *.fatbin
+Debug/**
+
+reference/.idea/*
+reference/cmake-build-intersectionreference/*
+reference/ki
+*.result
